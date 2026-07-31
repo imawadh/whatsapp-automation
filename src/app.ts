@@ -1,6 +1,5 @@
 import { existsSync } from 'node:fs';
 import express, { type Express, type Request, type Response } from 'express';
-import webhookRouter from './routes/webhook.ts';
 import whatsappRouter from './routes/whatsapp.ts';
 
 // Node reads .env natively, no dotenv needed. On Render the vars come from the
@@ -11,15 +10,12 @@ if (existsSync('.env')) {
 
 const app: Express = express();
 
-// Twilio posts webhooks as application/x-www-form-urlencoded, not JSON.
-app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 app.get('/', (_req: Request, res: Response) => {
   res.send('Hello World!');
 });
 
-app.use(webhookRouter);
 app.use(whatsappRouter);
 
 // Render injects PORT; fall back to 3000 for local dev.
