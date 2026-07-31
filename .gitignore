@@ -51,3 +51,5 @@ coverage/
 ## Misc
 *.tmp
 *.bak
+
+/src/generated/prisma

@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id        String   @id @default(uuid())
+  phone     String   @unique
+  lang      String?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  requests  ServiceRequest[]
+
+  @@map("users")
+}
+
+model Partner {
+  id        String   @id @default(uuid())
+  name      String
+  category  String
+  phone     String
+  active    Boolean  @default(true)
+  openJobs  Int      @default(0) @map("open_jobs")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  requests  ServiceRequest[]
+
+  @@map("partners")
+}
+
+model Service {
+  id     String  @id
+  label  String
+  price  Int
+  active Boolean @default(true)
+
+  requests ServiceRequest[]
+
+  @@map("services")
+}
+
+model ServiceRequest {
+  id         String   @id @default(uuid())
+  tracking   String   @unique
+  userId     String   @map("user_id")
+  serviceId  String   @map("service_id")
+  partnerId  String?  @map("partner_id")
+  status     String   @default("submitted")
+  data       Json
+  value      Int?
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  user       User      @relation(fields: [userId], references: [id])
+  service    Service   @relation(fields: [serviceId], references: [id])
+  partner    Partner?  @relation(fields: [partnerId], references: [id])
+  documents  Document[]
+  statusLog  RequestStatusLog[]
+
+  @@map("service_requests")
+}
+
+model Document {
+  id        String   @id @default(uuid())
+  requestId String   @map("request_id")
+  s3Key     String   @map("s3_key")
+  fileName  String?  @map("file_name")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  request   ServiceRequest @relation(fields: [requestId], references: [id])
+
+  @@map("documents")
+}
+
+model RequestStatusLog {
+  id        String   @id @default(uuid())
+  requestId String   @map("request_id")
+  status    String
+  changedAt DateTime @default(now()) @map("changed_at")
+
+  request   ServiceRequest @relation(fields: [requestId], references: [id])
+
+  @@map("request_status_log")
+}
