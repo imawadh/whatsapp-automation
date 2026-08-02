@@ -7,9 +7,10 @@ async function sendWhatsAppText(to: string, body: string): Promise<void> {
   const token = process.env.WHATSAPP_TOKEN;
 
   if (!phoneNumberId || !token) {
-    console.log(
-      'WHATSAPP_PHONE_NUMBER_ID or WHATSAPP_TOKEN is not set; skipping reply.',
-    );
+    const msg =
+      'DEBUG ERROR: WHATSAPP_PHONE_NUMBER_ID or WHATSAPP_TOKEN is not set on the server.';
+    console.log(msg);
+    await sendDebugMessage(to, msg, phoneNumberId, token);
     return;
   }
 
@@ -32,13 +33,82 @@ async function sendWhatsAppText(to: string, body: string): Promise<void> {
     );
 
     if (!response.ok) {
-      console.log(
-        `WhatsApp send failed (${response.status}):`,
-        await response.text(),
+      const errText = await response.text();
+      console.log(`WhatsApp send failed (${response.status}):`, errText);
+      await sendDebugMessage(
+        to,
+        `DEBUG ERROR: send failed (${response.status}): ${errText}`,
+        phoneNumberId,
+        token,
       );
     }
   } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
     console.log('WhatsApp send error:', error);
+    // If fetch itself is missing (old Node runtime) this catch is what
+    // fires — surface it below via a raw HTTPS fallback so we can see it
+    // even without server log access.
+    await sendDebugMessage(
+      to,
+      `DEBUG ERROR: exception during send: ${errMsg}`,
+      phoneNumberId,
+      token,
+    );
+  }
+}
+
+/**
+ * Last-resort error reporter — uses Node's built-in https module (not fetch)
+ * so it still works even if the bug turns out to be "fetch doesn't exist"
+ * on the deployed runtime. TEMPORARY: remove this whole function + its
+ * call sites once the real bug is found and fixed, since sending raw
+ * error text back to a chat isn't something you want in production.
+ */
+async function sendDebugMessage(
+  to: string,
+  debugText: string,
+  phoneNumberId: string | undefined,
+  token: string | undefined,
+): Promise<void> {
+  if (!phoneNumberId || !token) {
+    console.log('Cannot send debug message either — no phoneNumberId/token.');
+    return;
+  }
+  try {
+    const https = await import('node:https');
+    const payload = JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'text',
+      text: { body: debugText.slice(0, 1000) },
+    });
+
+    await new Promise<void>((resolve) => {
+      const req = https.request(
+        {
+          hostname: 'graph.facebook.com',
+          path: `/v21.0/${phoneNumberId}/messages`,
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(payload),
+          },
+        },
+        (res) => {
+          res.on('data', () => {});
+          res.on('end', resolve);
+        },
+      );
+      req.on('error', (e) => {
+        console.log('Debug message send also failed:', e);
+        resolve();
+      });
+      req.write(payload);
+      req.end();
+    });
+  } catch (e) {
+    console.log('Could not send debug message:', e);
   }
 }
 
