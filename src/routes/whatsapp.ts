@@ -145,7 +145,7 @@ router.post('/api/webhook', (req: Request, res: Response) => {
   const normalized = text?.trim().toLowerCase();
 
   if (from && (normalized === 'hi' || normalized === 'hello')) {
-    void sendWhatsAppText(from, "Hello! 👋 I'm your WhatsApp bot, working.");
+    void sendWhatsAppText(from, "Hello! 👋 I'm your WhatsApp webhook, working.");
   }
 });
 
