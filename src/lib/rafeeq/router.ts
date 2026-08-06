@@ -13,6 +13,10 @@ function getClient(): Groq {
 }
 
 const DEFAULT_MODEL = 'llama-3.3-70b-versatile';
+// Groq free-tier daily token limits are per-model, so when the primary model's
+// quota is exhausted, a smaller model still has headroom — degraded replies
+// beat an outage message.
+const DEFAULT_FALLBACK_MODEL = 'llama-3.1-8b-instant';
 
 const INTENTS = [
   'start_service',
@@ -114,10 +118,9 @@ export async function routeMessage(input: RouteInput): Promise<RoutedMessage> {
     { role: 'user', content: input.latestMessage },
   ];
 
-  let completion: Groq.Chat.Completions.ChatCompletion;
-  try {
-    completion = await getClient().chat.completions.create({
-      model: process.env.GROQ_MODEL ?? DEFAULT_MODEL,
+  const callModel = (model: string) =>
+    getClient().chat.completions.create({
+      model,
       messages,
       tools: [ROUTING_TOOL],
       tool_choice: { type: 'function', function: { name: 'route_message' } },
@@ -125,15 +128,29 @@ export async function routeMessage(input: RouteInput): Promise<RoutedMessage> {
       temperature: 0.3,
       max_completion_tokens: 1024,
     });
+
+  let completion: Groq.Chat.Completions.ChatCompletion;
+  try {
+    completion = await callModel(process.env.GROQ_MODEL ?? DEFAULT_MODEL);
   } catch (error) {
     if (error instanceof Groq.RateLimitError) {
-      console.log('Groq rate limited:', error.message);
-    } else if (error instanceof Groq.APIError) {
-      console.log(`Groq API error ${error.status}:`, error.message);
+      const fallbackModel =
+        process.env.GROQ_FALLBACK_MODEL ?? DEFAULT_FALLBACK_MODEL;
+      console.log(`Groq rate limited; retrying with ${fallbackModel}`);
+      try {
+        completion = await callModel(fallbackModel);
+      } catch (retryError) {
+        console.log('Fallback model also failed:', retryError);
+        return fallback(OUTAGE_REPLY);
+      }
     } else {
-      console.log('Groq request failed:', error);
+      if (error instanceof Groq.APIError) {
+        console.log(`Groq API error ${error.status}:`, error.message);
+      } else {
+        console.log('Groq request failed:', error);
+      }
+      return fallback(OUTAGE_REPLY);
     }
-    return fallback(OUTAGE_REPLY);
   }
 
   const toolCall = completion.choices[0]?.message?.tool_calls?.[0];
