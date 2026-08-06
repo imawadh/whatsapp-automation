@@ -1,4 +1,6 @@
 import { Router, type Request, type Response } from 'express';
+import { routeMessage } from '../lib/rafeeq/router.ts';
+import { getSession, recordTurn } from '../lib/rafeeq/session.ts';
 
 const router = Router();
 
@@ -142,11 +144,33 @@ router.post('/api/webhook', (req: Request, res: Response) => {
 
   const text: string | undefined = message.text?.body;
   const from: string | undefined = message.from;
-  const normalized = text?.trim().toLowerCase();
 
-  if (from && (normalized === 'hi' || normalized === 'hello')) {
-    void sendWhatsAppText(from, "Hello! 👋 I'm your WhatsApp webhook, working.");
+  // Non-text messages (media, locations, button taps) aren't routed yet.
+  if (from && text) {
+    handleIncomingText(from, text).catch((error) => {
+      console.log('Failed to handle incoming message:', error);
+    });
   }
 });
+
+async function handleIncomingText(from: string, text: string): Promise<void> {
+  const session = getSession(from);
+
+  const routed = await routeMessage({
+    msisdn: from,
+    lang: session.lang,
+    stage: session.stage,
+    activeService: session.activeService,
+    history: session.history,
+    latestMessage: text,
+  });
+
+  if (routed.intent === 'start_service' && routed.serviceId) {
+    session.activeService = routed.serviceId;
+  }
+
+  recordTurn(session, text, routed.replyText);
+  await sendWhatsAppText(from, routed.replyText);
+}
 
 export default router;
