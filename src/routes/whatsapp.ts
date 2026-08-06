@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import { routeMessage } from '../lib/rafeeq/router.ts';
-import { getSession, recordTurn } from '../lib/rafeeq/session.ts';
+import { loadSession, saveTurn } from '../lib/rafeeq/session.ts';
 
 const router = Router();
 
@@ -154,7 +154,7 @@ router.post('/api/webhook', (req: Request, res: Response) => {
 });
 
 async function handleIncomingText(from: string, text: string): Promise<void> {
-  const session = getSession(from);
+  const session = await loadSession(from);
 
   const routed = await routeMessage({
     msisdn: from,
@@ -165,12 +165,15 @@ async function handleIncomingText(from: string, text: string): Promise<void> {
     latestMessage: text,
   });
 
-  if (routed.intent === 'start_service' && routed.serviceId) {
-    session.activeService = routed.serviceId;
-  }
+  const activeService =
+    routed.intent === 'start_service' && routed.serviceId
+      ? routed.serviceId
+      : session.activeService;
 
-  recordTurn(session, text, routed.replyText);
+  // Reply first (latency), persist after — a failed save loses one turn of
+  // context but never the user's reply.
   await sendWhatsAppText(from, routed.replyText);
+  await saveTurn(session, text, routed.replyText, activeService);
 }
 
 export default router;

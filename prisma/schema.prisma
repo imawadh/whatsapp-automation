@@ -1,5 +1,6 @@
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
 }
 
 datasource db {
@@ -7,14 +8,31 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  phone     String   @unique
-  lang      String?
-  createdAt DateTime @default(now()) @map("created_at")
+  id            String   @id @default(uuid())
+  phone         String   @unique
+  lang          String?
+  activeService String?  @map("active_service")
+  createdAt     DateTime @default(now()) @map("created_at")
 
-  requests  ServiceRequest[]
+  requests ServiceRequest[]
+  messages Message[]
 
   @@map("users")
+}
+
+// One row per chat turn (user text or bot reply). This is what gives the
+// router its conversation memory across restarts and instances.
+model Message {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  role      String // "user" | "assistant"
+  content   String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@map("messages")
 }
 
 model Partner {
