@@ -1,118 +1,27 @@
 import { Router, type Request, type Response } from 'express';
 import { routeMessage } from '../lib/rafeeq/router.ts';
-import { loadSession, saveTurn } from '../lib/rafeeq/session.ts';
+import {
+  loadSession,
+  saveTurn,
+  setLang,
+  type SessionContext,
+} from '../lib/rafeeq/session.ts';
+import {
+  LANG_PREFIX,
+  PAGE_PREFIX,
+  SERVICE_PREFIX,
+  sendLanguagePicker,
+  sendServiceMenu,
+} from '../lib/rafeeq/menus.ts';
+import {
+  SERVICES,
+  isSupportedLang,
+  serviceLabel,
+  ui,
+} from '../lib/rafeeq/config.ts';
+import { sendText } from '../lib/whatsapp/send.ts';
 
 const router = Router();
-
-async function sendWhatsAppText(to: string, body: string): Promise<void> {
-  const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const token = process.env.WHATSAPP_TOKEN;
-
-  if (!phoneNumberId || !token) {
-    const msg =
-      'DEBUG ERROR: WHATSAPP_PHONE_NUMBER_ID or WHATSAPP_TOKEN is not set on the server.';
-    console.log(msg);
-    await sendDebugMessage(to, msg, phoneNumberId, token);
-    return;
-  }
-
-  try {
-    const response = await fetch(
-      `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`,
-      {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          to,
-          type: 'text',
-          text: { body },
-        }),
-      },
-    );
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.log(`WhatsApp send failed (${response.status}):`, errText);
-      await sendDebugMessage(
-        to,
-        `DEBUG ERROR: send failed (${response.status}): ${errText}`,
-        phoneNumberId,
-        token,
-      );
-    }
-  } catch (error) {
-    const errMsg = error instanceof Error ? error.message : String(error);
-    console.log('WhatsApp send error:', error);
-    // If fetch itself is missing (old Node runtime) this catch is what
-    // fires — surface it below via a raw HTTPS fallback so we can see it
-    // even without server log access.
-    await sendDebugMessage(
-      to,
-      `DEBUG ERROR: exception during send: ${errMsg}`,
-      phoneNumberId,
-      token,
-    );
-  }
-}
-
-/**
- * Last-resort error reporter — uses Node's built-in https module (not fetch)
- * so it still works even if the bug turns out to be "fetch doesn't exist"
- * on the deployed runtime. TEMPORARY: remove this whole function + its
- * call sites once the real bug is found and fixed, since sending raw
- * error text back to a chat isn't something you want in production.
- */
-async function sendDebugMessage(
-  to: string,
-  debugText: string,
-  phoneNumberId: string | undefined,
-  token: string | undefined,
-): Promise<void> {
-  if (!phoneNumberId || !token) {
-    console.log('Cannot send debug message either — no phoneNumberId/token.');
-    return;
-  }
-  try {
-    const https = await import('node:https');
-    const payload = JSON.stringify({
-      messaging_product: 'whatsapp',
-      to,
-      type: 'text',
-      text: { body: debugText.slice(0, 1000) },
-    });
-
-    await new Promise<void>((resolve) => {
-      const req = https.request(
-        {
-          hostname: 'graph.facebook.com',
-          path: `/v21.0/${phoneNumberId}/messages`,
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'Content-Length': Buffer.byteLength(payload),
-          },
-        },
-        (res) => {
-          res.on('data', () => {});
-          res.on('end', resolve);
-        },
-      );
-      req.on('error', (e) => {
-        console.log('Debug message send also failed:', e);
-        resolve();
-      });
-      req.write(payload);
-      req.end();
-    });
-  } catch (e) {
-    console.log('Could not send debug message:', e);
-  }
-}
 
 // Meta calls this once to verify we control the endpoint.
 router.get('/api/webhook', (req: Request, res: Response) => {
@@ -142,20 +51,120 @@ router.post('/api/webhook', (req: Request, res: Response) => {
 
   console.log('Incoming WhatsApp message:', JSON.stringify(message, null, 2));
 
-  const text: string | undefined = message.text?.body;
   const from: string | undefined = message.from;
-
-  // Non-text messages (media, locations, button taps) aren't routed yet.
-  if (from && text) {
-    handleIncomingText(from, text).catch((error) => {
-      console.log('Failed to handle incoming message:', error);
-    });
+  if (!from) {
+    return;
   }
+
+  handleMessage(from, message).catch((error) => {
+    console.log('Failed to handle incoming message:', error);
+  });
 });
 
-async function handleIncomingText(from: string, text: string): Promise<void> {
+async function handleMessage(from: string, message: unknown): Promise<void> {
   const session = await loadSession(from);
 
+  // Taps on a list row or reply button — both carry the id we set when
+  // building the menu (see menus.ts).
+  const interactive = (message as { interactive?: Record<string, unknown> })
+    .interactive;
+  const selectionId =
+    (interactive?.list_reply as { id?: string } | undefined)?.id ??
+    (interactive?.button_reply as { id?: string } | undefined)?.id;
+
+  if (selectionId) {
+    await handleSelection(from, session, selectionId);
+    return;
+  }
+
+  const text = (message as { text?: { body?: string } }).text?.body;
+  // Media, locations and other non-text messages aren't routed yet.
+  if (!text) {
+    return;
+  }
+
+  // Onboarding: nothing gets routed to the model until we know what language
+  // to answer in.
+  if (!session.hasLang) {
+    await sendLanguagePicker(from);
+    return;
+  }
+
+  await handleIncomingText(from, session, text);
+}
+
+async function handleSelection(
+  from: string,
+  session: SessionContext,
+  selectionId: string,
+): Promise<void> {
+  if (selectionId.startsWith(LANG_PREFIX)) {
+    const lang = selectionId.slice(LANG_PREFIX.length);
+    if (!isSupportedLang(lang)) {
+      await sendLanguagePicker(from);
+      return;
+    }
+
+    await setLang(session.userId, lang);
+    // One message, not two: the acknowledgement rides in the list's body so
+    // the service menu can't get separated from it in the chat.
+    const ack = ui(lang, 'langSet');
+    await sendServiceMenu(from, lang, { ack });
+    await saveTurn(
+      session,
+      `[selected language: ${lang}]`,
+      `${ack}\n\n${ui(lang, 'menuPrompt')}`,
+      session.activeService,
+    );
+    return;
+  }
+
+  if (selectionId.startsWith(PAGE_PREFIX)) {
+    // Pure navigation within the menu — nothing worth recording as a turn.
+    const page = Number.parseInt(selectionId.slice(PAGE_PREFIX.length), 10);
+    await sendServiceMenu(from, session.lang, {
+      page: Number.isNaN(page) ? 0 : page,
+    });
+    return;
+  }
+
+  if (selectionId.startsWith(SERVICE_PREFIX)) {
+    const serviceId = selectionId.slice(SERVICE_PREFIX.length);
+    if (!SERVICES.some((s) => s.id === serviceId)) {
+      await sendServiceMenu(from, session.lang);
+      return;
+    }
+    await startService(from, session, serviceId);
+    return;
+  }
+
+  console.log(`Unrecognised interactive selection id: ${selectionId}`);
+}
+
+/**
+ * Picking a service from the menu only opens the conversation for it — it does
+ * not create a request. Recording the choice as a `[selected: ...]` turn is what
+ * carries it into the model's history, and saveTurn sets it as the active
+ * service so following messages route as continue_flow.
+ */
+async function startService(
+  from: string,
+  session: SessionContext,
+  serviceId: string,
+): Promise<void> {
+  const reply = ui(session.lang, 'serviceSelected', {
+    service: serviceLabel(session.lang, serviceId),
+  });
+
+  await sendText(from, reply);
+  await saveTurn(session, `[selected: ${serviceId}]`, reply, serviceId);
+}
+
+async function handleIncomingText(
+  from: string,
+  session: SessionContext,
+  text: string,
+): Promise<void> {
   const routed = await routeMessage({
     msisdn: from,
     lang: session.lang,
@@ -172,7 +181,7 @@ async function handleIncomingText(from: string, text: string): Promise<void> {
 
   // Reply first (latency), persist after — a failed save loses one turn of
   // context but never the user's reply.
-  await sendWhatsAppText(from, routed.replyText);
+  await sendText(from, routed.replyText);
   await saveTurn(session, text, routed.replyText, activeService);
 }
 

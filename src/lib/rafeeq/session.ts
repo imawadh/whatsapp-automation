@@ -2,6 +2,7 @@
 // survives restarts and works across instances.
 
 import { getDb } from '../db.ts';
+import { DEFAULT_LANG } from './config.ts';
 
 export interface ChatTurn {
   role: 'user' | 'assistant';
@@ -11,6 +12,9 @@ export interface ChatTurn {
 export interface SessionContext {
   userId: string;
   lang: string;
+  // Whether the user has actually picked a language, as opposed to `lang`
+  // falling back to the default — drives whether the picker is shown.
+  hasLang: boolean;
   stage: 'new' | 'active';
   activeService?: string;
   history: ChatTurn[];
@@ -46,7 +50,8 @@ export async function loadSession(msisdn: string): Promise<SessionContext> {
 
   return {
     userId: user.id,
-    lang: user.lang ?? 'en',
+    lang: user.lang ?? DEFAULT_LANG,
+    hasLang: user.lang != null,
     stage: history.length === 0 ? 'new' : 'active',
     // An activeService left over from an expired conversation shouldn't leak
     // into a fresh one.
@@ -54,6 +59,11 @@ export async function loadSession(msisdn: string): Promise<SessionContext> {
       history.length === 0 ? undefined : (user.activeService ?? undefined),
     history,
   };
+}
+
+export async function setLang(userId: string, lang: string): Promise<void> {
+  const db = getDb();
+  await db.user.update({ where: { id: userId }, data: { lang } });
 }
 
 export async function saveTurn(
@@ -66,26 +76,26 @@ export async function saveTurn(
   // Explicit timestamps 1ms apart so the pair always sorts user-then-assistant
   // even when both inserts land in the same millisecond.
   const now = Date.now();
-  await db.$transaction([
-    db.message.create({
-      data: {
-        userId: session.userId,
-        role: 'user',
-        content: userText,
-        createdAt: new Date(now),
+  // One nested write rather than a three-statement $transaction: still atomic,
+  // but a single round trip. The batched version could exceed Prisma's 5s
+  // transaction timeout while waiting on a connection during a burst, which
+  // silently lost the turn.
+  await db.user.update({
+    where: { id: session.userId },
+    data: {
+      activeService: activeService ?? null,
+      messages: {
+        createMany: {
+          data: [
+            { role: 'user', content: userText, createdAt: new Date(now) },
+            {
+              role: 'assistant',
+              content: assistantText,
+              createdAt: new Date(now + 1),
+            },
+          ],
+        },
       },
-    }),
-    db.message.create({
-      data: {
-        userId: session.userId,
-        role: 'assistant',
-        content: assistantText,
-        createdAt: new Date(now + 1),
-      },
-    }),
-    db.user.update({
-      where: { id: session.userId },
-      data: { activeService: activeService ?? null },
-    }),
-  ]);
+    },
+  });
 }
