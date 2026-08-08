@@ -13,7 +13,15 @@ export function getDb(): PrismaClient {
       throw new Error('DATABASE_URL is not set');
     }
     prisma = new PrismaClient({
-      adapter: new PrismaPg({ connectionString }),
+      // Neon drops pooled connections that sit idle, which surfaces as
+      // "Connection terminated unexpectedly" on the next query and silently
+      // loses that message. Recycle them before Neon does.
+      adapter: new PrismaPg({
+        connectionString,
+        max: 5,
+        idleTimeoutMillis: 20_000,
+        connectionTimeoutMillis: 10_000,
+      }),
     });
   }
   return prisma;

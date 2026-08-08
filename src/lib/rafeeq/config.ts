@@ -101,6 +101,61 @@ export function isSupportedLang(lang: string): boolean {
   return LANGS.some((l) => l.id === lang);
 }
 
+// WhatsApp spends an interactive list once a row is picked — you can't scroll
+// back and choose again from the same message. These keywords are how a user
+// gets a fresh menu instead of being stuck.
+const MENU_KEYWORDS = new Set([
+  'menu',
+  'services',
+  'service',
+  'list',
+  'options',
+  'start',
+  'قائمة',
+  'القائمة',
+  'خدمات',
+  'الخدمات',
+  'مینو',
+  'فہرست',
+  'मेनू',
+  'मेन्यू',
+  'सेवा',
+  'सेवाएं',
+  'सेवाएँ',
+  'सूची',
+  'মেনু',
+  'সেবা',
+  'তালিকা',
+]);
+
+const LANG_KEYWORDS = new Set([
+  'language',
+  'lang',
+  'لغة',
+  'اللغة',
+  'زبان',
+  'भाषा',
+  'ভাষা',
+]);
+
+// Only ever matches a message that is nothing but the keyword, so an ordinary
+// sentence that happens to contain "service" still reaches the model.
+function normalizeKeyword(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?۔،,]+$/u, '')
+    .trim();
+}
+
+export function isMenuKeyword(text: string): boolean {
+  return MENU_KEYWORDS.has(normalizeKeyword(text));
+}
+
+export function isLangKeyword(text: string): boolean {
+  return LANG_KEYWORDS.has(normalizeKeyword(text));
+}
+
 // One icon per service, shown on every menu row. Many people using this can't
 // read the row text quickly (or at all), so the icon is the fastest way to find
 // the right service — keep them concrete and unambiguous.
@@ -139,6 +194,7 @@ const UI_STRINGS: Record<string, Record<string, string>> = {
     backDesc: 'Return to the first page',
     serviceSelected:
       '{service}\n\n✍️ Tell me in a few words what you need, and I will take it from there.',
+    menuHint: '💡 Type *menu* anytime to see all services again.',
   },
   ar: {
     welcome: '👋 أهلاً بك في رفيق!\n🌐 من فضلك اختر لغتك.',
@@ -152,6 +208,7 @@ const UI_STRINGS: Record<string, Record<string, string>> = {
     backDesc: 'العودة إلى الصفحة الأولى',
     serviceSelected:
       '{service}\n\n✍️ أخبرني باختصار بما تحتاجه وسأتولى الباقي.',
+    menuHint: '💡 اكتب *قائمة* في أي وقت لعرض كل الخدمات من جديد.',
   },
   ur: {
     welcome: '👋 رفیق میں خوش آمدید!\n🌐 براہ کرم اپنی زبان منتخب کریں۔',
@@ -165,6 +222,7 @@ const UI_STRINGS: Record<string, Record<string, string>> = {
     backDesc: 'پہلے صفحے پر واپس جائیں',
     serviceSelected:
       '{service}\n\n✍️ مجھے مختصر بتائیں آپ کو کیا چاہیے، باقی میں سنبھال لوں گا۔',
+    menuHint: '💡 تمام خدمات دوبارہ دیکھنے کے لیے کبھی بھی *مینو* لکھیں۔',
   },
   hi: {
     welcome: '👋 रफ़ीक़ में आपका स्वागत है!\n🌐 कृपया अपनी भाषा चुनें।',
@@ -178,6 +236,7 @@ const UI_STRINGS: Record<string, Record<string, string>> = {
     backDesc: 'पहले पेज पर लौटें',
     serviceSelected:
       '{service}\n\n✍️ कुछ शब्दों में बताइए आपको क्या चाहिए, आगे मैं संभाल लूँगा।',
+    menuHint: '💡 सभी सेवाएँ दोबारा देखने के लिए कभी भी *मेनू* लिखें।',
   },
   bn: {
     welcome: '👋 রফিক-এ স্বাগতম!\n🌐 অনুগ্রহ করে আপনার ভাষা বাছুন।',
@@ -191,6 +250,7 @@ const UI_STRINGS: Record<string, Record<string, string>> = {
     backDesc: 'প্রথম পাতায় ফিরুন',
     serviceSelected:
       '{service}\n\n✍️ কয়েকটি কথায় বলুন আপনার কী দরকার, বাকিটা আমি দেখছি।',
+    menuHint: '💡 সব সেবা আবার দেখতে যেকোনো সময় *মেনু* লিখুন।',
   },
 };
 

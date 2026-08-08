@@ -15,6 +15,8 @@ import {
 } from '../lib/rafeeq/menus.ts';
 import {
   SERVICES,
+  isLangKeyword,
+  isMenuKeyword,
   isSupportedLang,
   serviceLabel,
   ui,
@@ -90,6 +92,18 @@ async function handleMessage(from: string, message: unknown): Promise<void> {
     return;
   }
 
+  // An interactive list is spent once a row is picked, so these keywords are
+  // the only way back to a usable menu. Treated as navigation, like paging —
+  // not recorded as a conversation turn.
+  if (isLangKeyword(text)) {
+    await sendLanguagePicker(from);
+    return;
+  }
+  if (isMenuKeyword(text)) {
+    await sendServiceMenu(from, session.lang);
+    return;
+  }
+
   await handleIncomingText(from, session, text);
 }
 
@@ -152,9 +166,9 @@ async function startService(
   session: SessionContext,
   serviceId: string,
 ): Promise<void> {
-  const reply = ui(session.lang, 'serviceSelected', {
+  const reply = `${ui(session.lang, 'serviceSelected', {
     service: serviceLabel(session.lang, serviceId),
-  });
+  })}\n\n${ui(session.lang, 'menuHint')}`;
 
   await sendText(from, reply);
   await saveTurn(session, `[selected: ${serviceId}]`, reply, serviceId);

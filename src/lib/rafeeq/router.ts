@@ -84,7 +84,7 @@ const ROUTING_TOOL: Groq.Chat.Completions.ChatCompletionTool = {
         reply_text: {
           type: 'string',
           description:
-            'The reply to send back to the user, written in their language, WhatsApp-length (short).',
+            'The reply to send back to the user, written in their language, WhatsApp-length (short). Must contain one or two relevant emoji — including for greetings and short acknowledgements.',
         },
       },
       required: ['intent', 'extracted_fields', 'reply_text'],
